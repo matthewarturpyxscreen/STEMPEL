@@ -3,17 +3,16 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import easyocr
-from io import BytesIO
 import math
 
 st.set_page_config(layout="wide")
-st.title("AI Stamp Rebuilder V2 - STRICT MODE")
+st.title("AI Stamp Rebuilder V3 - STABLE OCR ENGINE")
 
-CONF_THRESHOLD = 0.85
+CONF_THRESHOLD = 0.80
 
-# ==============================
+# =====================================
 # UTIL FUNCTIONS
-# ==============================
+# =====================================
 
 def resize_for_analysis(img, max_dim=1200):
     h, w = img.shape[:2]
@@ -45,20 +44,31 @@ def detect_circle(gray):
 
     return None
 
-def polar_unwrap(image, center, radius):
-    height = radius
-    width = int(2 * math.pi * radius)
+# 🔥 PREPROCESSING UPGRADE
+def enhance_for_ocr(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    polar = cv2.warpPolar(
-        image,
-        (width, height),
-        center,
-        radius,
-        cv2.WARP_POLAR_LINEAR
+    # CLAHE (auto contrast pintar)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+
+    # Sharpen ringan
+    kernel = np.array([[0,-1,0],
+                       [-1,5,-1],
+                       [0,-1,0]])
+    gray = cv2.filter2D(gray, -1, kernel)
+
+    # Adaptive threshold (lebih stabil dari global threshold)
+    thresh = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        2
     )
 
-    polar = cv2.rotate(polar, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    return polar
+    return thresh
 
 def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
     dpi = 300
@@ -85,9 +95,16 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
 
     return img
 
-# ==============================
+def process_result(result):
+    if len(result) == 0:
+        return "", 0
+    text = " ".join([r[1] for r in result])
+    conf = np.mean([r[2] for r in result])
+    return text, conf
+
+# =====================================
 # MAIN FLOW
-# ==============================
+# =====================================
 
 uploaded = st.file_uploader("Upload Foto Stempel", type=["png","jpg","jpeg"])
 
@@ -117,26 +134,27 @@ if uploaded:
     else:
         x, y, r = map(int, circle)
 
-        unwrap = polar_unwrap(img_analysis, (x,y), r)
+        mask = np.zeros_like(gray)
+        cv2.circle(mask, (x,y), r, 255, -1)
+        isolated = cv2.bitwise_and(img_analysis, img_analysis, mask=mask)
 
-        st.subheader("Hasil Polar Unwrap")
-        st.image(unwrap, channels="BGR")
+        st.subheader("Area Stempel Terdeteksi")
+        st.image(isolated, channels="BGR")
 
-        h = unwrap.shape[0]
-        top_part = unwrap[:h//2, :]
-        bottom_part = unwrap[h//2:, :]
+        # 🔥 PREPROCESS SEBELUM OCR
+        enhanced = enhance_for_ocr(isolated)
 
-        reader = easyocr.Reader(['id','en'])
+        st.subheader("Enhanced for OCR")
+        st.image(enhanced, channels="GRAY")
+
+        h, w = enhanced.shape[:2]
+        top_part = enhanced[0:h//2, :]
+        bottom_part = enhanced[h//2:h, :]
+
+        reader = easyocr.Reader(['id','en'], gpu=False)
 
         result_top = reader.readtext(top_part)
         result_bottom = reader.readtext(bottom_part)
-
-        def process_result(result):
-            if len(result) == 0:
-                return "", 0
-            text = " ".join([r[1] for r in result])
-            conf = np.mean([r[2] for r in result])
-            return text, conf
 
         text_top_detected, conf_top = process_result(result_top)
         text_bottom_detected, conf_bottom = process_result(result_bottom)
