@@ -6,13 +6,13 @@ import easyocr
 import math
 
 st.set_page_config(layout="wide")
-st.title("AI Stamp Rebuilder V4 - STABLE OCR")
+st.title("AI Stamp Rebuilder V5 - RING MASKING STABLE")
 
 CONF_THRESHOLD = 0.75
 
-# =========================================
+# ======================================================
 # UTIL FUNCTIONS
-# =========================================
+# ======================================================
 
 def resize_for_analysis(img, max_dim=1200):
     h, w = img.shape[:2]
@@ -44,26 +44,33 @@ def detect_circle(gray):
 
     return None
 
-# 🔥 OCR preprocessing (natural grayscale, no harsh threshold)
 def enhance_for_ocr(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Auto contrast pintar
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     gray = clahe.apply(gray)
 
-    # Blur ringan
     gray = cv2.GaussianBlur(gray, (3,3), 0)
 
     return gray
 
 def process_result(result):
-    if len(result) == 0:
+    if not result:
         return "", 0
-    
-    # Ambil teks terpanjang (biasanya paling relevan)
-    longest = max(result, key=lambda x: len(x[1]))
-    return longest[1], longest[2]
+
+    best_text = ""
+    best_conf = 0
+
+    for item in result:
+        if isinstance(item, (list, tuple)) and len(item) >= 3:
+            text = item[1]
+            conf = item[2]
+
+            if isinstance(text, str) and len(text) > len(best_text):
+                best_text = text
+                best_conf = conf
+
+    return best_text, best_conf
 
 def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
     dpi = 300
@@ -90,9 +97,9 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
 
     return img
 
-# =========================================
+# ======================================================
 # MAIN FLOW
-# =========================================
+# ======================================================
 
 uploaded = st.file_uploader("Upload Foto Stempel", type=["png","jpg","jpeg"])
 
@@ -122,26 +129,33 @@ if uploaded:
     else:
         x, y, r = map(int, circle)
 
-        mask = np.zeros_like(gray)
-        cv2.circle(mask, (x,y), r, 255, -1)
-        isolated = cv2.bitwise_and(img_analysis, img_analysis, mask=mask)
+        # 🔥 RING MASK (bukan full circle)
+        outer_mask = np.zeros_like(gray)
+        inner_mask = np.zeros_like(gray)
 
-        st.subheader("Area Stempel Terdeteksi")
-        st.image(isolated, channels="BGR")
+        cv2.circle(outer_mask, (x,y), int(r*0.95), 255, -1)
+        cv2.circle(inner_mask, (x,y), int(r*0.65), 255, -1)
 
-        enhanced = enhance_for_ocr(isolated)
+        ring_mask = cv2.subtract(outer_mask, inner_mask)
 
-        st.subheader("Grayscale Enhanced")
+        isolated_ring = cv2.bitwise_and(img_analysis, img_analysis, mask=ring_mask)
+
+        st.subheader("Ring Area (Text Only)")
+        st.image(isolated_ring, channels="BGR")
+
+        enhanced = enhance_for_ocr(isolated_ring)
+
+        st.subheader("Enhanced for OCR")
         st.image(enhanced, channels="GRAY")
 
         h, w = enhanced.shape[:2]
         top_part = enhanced[0:h//2, :]
         bottom_part = enhanced[h//2:h, :]
 
-        reader = easyocr.Reader(['id','en'], gpu=False, verbose=False)
+        reader = easyocr.Reader(['id','en'], gpu=False)
 
-        result_top = reader.readtext(top_part, detail=1, paragraph=True)
-        result_bottom = reader.readtext(bottom_part, detail=1, paragraph=True)
+        result_top = reader.readtext(top_part, detail=1)
+        result_bottom = reader.readtext(bottom_part, detail=1)
 
         text_top_detected, conf_top = process_result(result_top)
         text_bottom_detected, conf_bottom = process_result(result_bottom)
