@@ -6,9 +6,9 @@ import easyocr
 import math
 
 st.set_page_config(layout="wide")
-st.title("AI Stamp Rebuilder V6 - RING OCR ENGINE")
+st.title("AI Stamp Rebuilder V7 - FULL AUTO")
 
-CONF_THRESHOLD = 0.70
+CONF_THRESHOLD = 0.60
 
 # =====================================
 # UTIL
@@ -40,24 +40,48 @@ def enhance_for_ocr(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     gray = clahe.apply(gray)
+    gray = cv2.GaussianBlur(gray, (3,3), 0)
     return gray
+
+# 🔥 RING UNWRAP
+def unwrap_ring(image, center, outer_r, inner_r):
+    flags = cv2.WARP_POLAR_LINEAR
+    max_radius = outer_r
+
+    polar = cv2.warpPolar(
+        image,
+        (int(2 * math.pi * max_radius), outer_r),
+        center,
+        max_radius,
+        flags
+    )
+
+    polar = cv2.rotate(polar, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    ring_height = outer_r - inner_r
+    ring_only = polar[inner_r:outer_r, :]
+
+    return ring_only
 
 def process_result(result):
     if not result:
         return "", 0.0
 
-    best_text = ""
-    best_conf = 0.0
+    texts = []
+    confs = []
 
     for item in result:
         if isinstance(item, (list, tuple)) and len(item) >= 3:
-            text = item[1]
-            conf = item[2]
-            if len(text) > len(best_text):
-                best_text = text
-                best_conf = conf
+            texts.append(item[1])
+            confs.append(item[2])
 
-    return best_text, best_conf
+    if not texts:
+        return "", 0.0
+
+    full_text = " ".join(texts)
+    avg_conf = np.mean(confs)
+
+    return full_text, avg_conf
 
 def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
     dpi = 300
@@ -65,7 +89,9 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
 
     img = Image.new("RGBA", (px, px), (255,255,255,0))
     draw = ImageDraw.Draw(img)
+
     center = px // 2
+    radius = px // 2 - 20
 
     draw.ellipse((20,20,px-20,px-20), outline="blue", width=10)
 
@@ -99,37 +125,44 @@ if uploaded:
     circle = detect_circle(gray)
 
     if circle is None:
-        st.warning("Lingkaran tidak terdeteksi → Mode Manual")
+        st.error("Lingkaran tidak terdeteksi.")
     else:
         x, y, r = map(int, circle)
 
-        # 🔥 RING MASK
-        mask = np.zeros_like(gray)
-        cv2.circle(mask, (x,y), r, 255, -1)
-        cv2.circle(mask, (x,y), int(r*0.75), 0, -1)
+        outer_r = r
+        inner_r = int(r * 0.70)
 
-        ring = cv2.bitwise_and(img_analysis, img_analysis, mask=mask)
+        ring_strip = unwrap_ring(img_analysis, (x,y), outer_r, inner_r)
 
-        st.subheader("Ring Area for OCR")
-        st.image(ring, channels="BGR")
+        st.subheader("Unwrapped Ring")
+        st.image(ring_strip, channels="BGR")
 
-        enhanced = enhance_for_ocr(ring)
+        enhanced = enhance_for_ocr(ring_strip)
         st.image(enhanced, channels="GRAY")
 
+        h = enhanced.shape[0]
+        top_strip = enhanced[:h//2, :]
+        bottom_strip = enhanced[h//2:, :]
+
         reader = easyocr.Reader(['id','en'], gpu=False)
-        result = reader.readtext(enhanced, detail=1)
 
-        text_detected, conf = process_result(result)
+        result_top = reader.readtext(top_strip, detail=1)
+        result_bottom = reader.readtext(bottom_strip, detail=1)
 
-        st.write(f"OCR Confidence: {round(conf,2)}")
+        text_top, conf_top = process_result(result_top)
+        text_bottom, conf_bottom = process_result(result_bottom)
 
-        text_top = st.text_input("Edit Teks Atas:", text_detected)
-        text_mid = st.text_input("Edit Teks Tengah:")
-        text_bot = st.text_input("Edit Teks Bawah:")
+        avg_conf = (conf_top + conf_bottom) / 2
 
-        if conf < CONF_THRESHOLD:
-            st.error("Confidence rendah. Koreksi sebelum generate.")
-        else:
+        st.write(f"OCR Confidence: {round(avg_conf,2)}")
+
+        text_top = st.text_input("Teks Atas:", text_top)
+        text_mid = st.text_input("Teks Tengah:")
+        text_bot = st.text_input("Teks Bawah:", text_bottom)
+
+        if avg_conf >= CONF_THRESHOLD:
             if st.button("Generate Clean"):
                 clean = generate_clean_stamp(text_top, text_mid, text_bot)
                 st.image(clean)
+        else:
+            st.warning("Confidence rendah, koreksi manual disarankan.")
