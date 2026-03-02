@@ -6,13 +6,13 @@ import easyocr
 import math
 
 st.set_page_config(layout="wide")
-st.title("AI Stamp Rebuilder V3 - STABLE OCR ENGINE")
+st.title("AI Stamp Rebuilder V4 - STABLE OCR")
 
-CONF_THRESHOLD = 0.80
+CONF_THRESHOLD = 0.75
 
-# =====================================
+# =========================================
 # UTIL FUNCTIONS
-# =====================================
+# =========================================
 
 def resize_for_analysis(img, max_dim=1200):
     h, w = img.shape[:2]
@@ -44,31 +44,26 @@ def detect_circle(gray):
 
     return None
 
-# 🔥 PREPROCESSING UPGRADE
+# 🔥 OCR preprocessing (natural grayscale, no harsh threshold)
 def enhance_for_ocr(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # CLAHE (auto contrast pintar)
-    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8,8))
+    # Auto contrast pintar
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     gray = clahe.apply(gray)
 
-    # Sharpen ringan
-    kernel = np.array([[0,-1,0],
-                       [-1,5,-1],
-                       [0,-1,0]])
-    gray = cv2.filter2D(gray, -1, kernel)
+    # Blur ringan
+    gray = cv2.GaussianBlur(gray, (3,3), 0)
 
-    # Adaptive threshold (lebih stabil dari global threshold)
-    thresh = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        2
-    )
+    return gray
 
-    return thresh
+def process_result(result):
+    if len(result) == 0:
+        return "", 0
+    
+    # Ambil teks terpanjang (biasanya paling relevan)
+    longest = max(result, key=lambda x: len(x[1]))
+    return longest[1], longest[2]
 
 def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
     dpi = 300
@@ -95,16 +90,9 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
 
     return img
 
-def process_result(result):
-    if len(result) == 0:
-        return "", 0
-    text = " ".join([r[1] for r in result])
-    conf = np.mean([r[2] for r in result])
-    return text, conf
-
-# =====================================
+# =========================================
 # MAIN FLOW
-# =====================================
+# =========================================
 
 uploaded = st.file_uploader("Upload Foto Stempel", type=["png","jpg","jpeg"])
 
@@ -141,20 +129,19 @@ if uploaded:
         st.subheader("Area Stempel Terdeteksi")
         st.image(isolated, channels="BGR")
 
-        # 🔥 PREPROCESS SEBELUM OCR
         enhanced = enhance_for_ocr(isolated)
 
-        st.subheader("Enhanced for OCR")
+        st.subheader("Grayscale Enhanced")
         st.image(enhanced, channels="GRAY")
 
         h, w = enhanced.shape[:2]
         top_part = enhanced[0:h//2, :]
         bottom_part = enhanced[h//2:h, :]
 
-        reader = easyocr.Reader(['id','en'], gpu=False)
+        reader = easyocr.Reader(['id','en'], gpu=False, verbose=False)
 
-        result_top = reader.readtext(top_part)
-        result_bottom = reader.readtext(bottom_part)
+        result_top = reader.readtext(top_part, detail=1, paragraph=True)
+        result_bottom = reader.readtext(bottom_part, detail=1, paragraph=True)
 
         text_top_detected, conf_top = process_result(result_top)
         text_bottom_detected, conf_bottom = process_result(result_bottom)
