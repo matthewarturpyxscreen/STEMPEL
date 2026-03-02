@@ -6,13 +6,13 @@ import easyocr
 import math
 
 st.set_page_config(layout="wide")
-st.title("AI Stamp Rebuilder V5 - RING MASKING STABLE")
+st.title("AI Stamp Rebuilder V5 - FIXED & STABLE")
 
 CONF_THRESHOLD = 0.75
 
-# ======================================================
+# =========================================
 # UTIL FUNCTIONS
-# ======================================================
+# =========================================
 
 def resize_for_analysis(img, max_dim=1200):
     h, w = img.shape[:2]
@@ -54,12 +54,13 @@ def enhance_for_ocr(image):
 
     return gray
 
+# 🔥 FIXED ROBUST PROCESS RESULT
 def process_result(result):
     if not result:
-        return "", 0
+        return "", 0.0
 
     best_text = ""
-    best_conf = 0
+    best_conf = 0.0
 
     for item in result:
         if isinstance(item, (list, tuple)) and len(item) >= 3:
@@ -80,7 +81,6 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
     draw = ImageDraw.Draw(img)
 
     center = px // 2
-    radius = px // 2 - 20
 
     draw.ellipse((20,20,px-20,px-20), outline="blue", width=10)
 
@@ -97,9 +97,9 @@ def generate_clean_stamp(text_top, text_mid, text_bot, diameter_cm=5):
 
     return img
 
-# ======================================================
+# =========================================
 # MAIN FLOW
-# ======================================================
+# =========================================
 
 uploaded = st.file_uploader("Upload Foto Stempel", type=["png","jpg","jpeg"])
 
@@ -129,26 +129,19 @@ if uploaded:
     else:
         x, y, r = map(int, circle)
 
-        # 🔥 RING MASK (bukan full circle)
-        outer_mask = np.zeros_like(gray)
-        inner_mask = np.zeros_like(gray)
+        mask = np.zeros_like(gray)
+        cv2.circle(mask, (x,y), r, 255, -1)
+        isolated = cv2.bitwise_and(img_analysis, img_analysis, mask=mask)
 
-        cv2.circle(outer_mask, (x,y), int(r*0.95), 255, -1)
-        cv2.circle(inner_mask, (x,y), int(r*0.65), 255, -1)
+        st.subheader("Area Stempel Terdeteksi")
+        st.image(isolated, channels="BGR")
 
-        ring_mask = cv2.subtract(outer_mask, inner_mask)
+        enhanced = enhance_for_ocr(isolated)
 
-        isolated_ring = cv2.bitwise_and(img_analysis, img_analysis, mask=ring_mask)
-
-        st.subheader("Ring Area (Text Only)")
-        st.image(isolated_ring, channels="BGR")
-
-        enhanced = enhance_for_ocr(isolated_ring)
-
-        st.subheader("Enhanced for OCR")
+        st.subheader("Grayscale Enhanced")
         st.image(enhanced, channels="GRAY")
 
-        h, w = enhanced.shape[:2]
+        h = enhanced.shape[0]
         top_part = enhanced[0:h//2, :]
         bottom_part = enhanced[h//2:h, :]
 
